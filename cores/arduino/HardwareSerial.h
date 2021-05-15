@@ -39,6 +39,10 @@
 // atomicity guards needed for that are not implemented. This will
 // often work, but occasionally a race condition can occur that makes
 // Serial behave erratically. See https://github.com/arduino/Arduino/issues/2405
+
+#define SERIAL_TX_BUFFER_SIZE	128
+#define SERIAL_RX_BUFFER_SIZE	128
+
 #if !defined(SERIAL_TX_BUFFER_SIZE)
 #if ((RAMEND - RAMSTART) < 1023)
 #define SERIAL_TX_BUFFER_SIZE 16
@@ -89,6 +93,12 @@ typedef uint8_t rx_buffer_index_t;
 #define SERIAL_6O2 0x3A
 #define SERIAL_7O2 0x3C
 #define SERIAL_8O2 0x3E
+#define SERIAL_9E1 0x126
+#define SERIAL_9E2 0x12E
+#define SERIAL_9N1 0x106
+#define SERIAL_9N2 0x10E
+#define SERIAL_9O1 0x136
+#define SERIAL_9O2 0x13E
 
 class HardwareSerial : public Stream
 {
@@ -107,6 +117,10 @@ class HardwareSerial : public Stream
     volatile tx_buffer_index_t _tx_buffer_head;
     volatile tx_buffer_index_t _tx_buffer_tail;
 
+    size_t xwrite(uint8_t c, bool bit9);
+    uint8_t _tx_9bit[(SERIAL_TX_BUFFER_SIZE / 8) + 1];
+    uint8_t _rx_9bit[(SERIAL_RX_BUFFER_SIZE / 8) + 1];
+
     // Don't put any members after these buffers, since only the first
     // 32 bytes of this struct can be accessed quickly using the ldd
     // instruction.
@@ -119,7 +133,7 @@ class HardwareSerial : public Stream
       volatile uint8_t *ucsra, volatile uint8_t *ucsrb,
       volatile uint8_t *ucsrc, volatile uint8_t *udr);
     void begin(unsigned long baud) { begin(baud, SERIAL_8N1); }
-    void begin(unsigned long, uint8_t);
+    void begin(unsigned long baud, uint16_t config);
     void end();
     virtual int available(void);
     virtual int peek(void);
@@ -127,6 +141,9 @@ class HardwareSerial : public Stream
     virtual int availableForWrite(void);
     virtual void flush(void);
     virtual size_t write(uint8_t);
+    size_t write9bit(uint8_t n) { return xwrite(n, true); };
+    void set_tx_mode(void);
+    void set_rx_mode(void);
     inline size_t write(unsigned long n) { return write((uint8_t)n); }
     inline size_t write(long n) { return write((uint8_t)n); }
     inline size_t write(unsigned int n) { return write((uint8_t)n); }

@@ -91,6 +91,12 @@ void HardwareSerial::_tx_udr_empty_irq(void)
   // If interrupts are enabled, there must be more data in the output
   // buffer. Send the next byte
   unsigned char c = _tx_buffer[_tx_buffer_tail];
+  if(bit_is_set(*_ucsrb, UCSZ02)) {
+    if (SERIAL9BIT_bit(_tx_9bit, _tx_buffer_tail))
+      sbi(*_ucsrb, TXB80);
+    else
+      cbi(*_ucsrb, TXB80);
+  }
   _tx_buffer_tail = (_tx_buffer_tail + 1) % SERIAL_TX_BUFFER_SIZE;
 
   *_udr = c;
@@ -114,7 +120,7 @@ void HardwareSerial::_tx_udr_empty_irq(void)
 
 // Public Methods //////////////////////////////////////////////////////////////
 
-void HardwareSerial::begin(unsigned long baud, byte config)
+void HardwareSerial::begin(unsigned long baud, uint16_t config)
 {
   // Try u2x mode first
   uint16_t baud_setting = (F_CPU / 4 / baud - 1) / 2;
@@ -141,6 +147,10 @@ void HardwareSerial::begin(unsigned long baud, byte config)
 #if defined(__AVR_ATmega8__)
   config |= 0x80; // select UCSRC register (shared with UBRRH)
 #endif
+  if(config & 0x100) {
+    sbi(*_ucsrb, UCSZ02); // 9bit mode
+  }
+  *_ucsrc = (uint8_t) config;
   *_ucsrc = config;
   
   sbi(*_ucsrb, RXEN0);
@@ -173,6 +183,9 @@ int HardwareSerial::peek(void)
   if (_rx_buffer_head == _rx_buffer_tail) {
     return -1;
   } else {
+    if (bit_is_set(*_ucsrb, UCSZ02) && SERIAL9BIT_bit(_rx_9bit, _rx_buffer_tail)) {
+      return (_rx_buffer[_rx_buffer_tail] | 0x100);
+    }
     return _rx_buffer[_rx_buffer_tail];
   }
 }
@@ -184,8 +197,9 @@ int HardwareSerial::read(void)
     return -1;
   } else {
     unsigned char c = _rx_buffer[_rx_buffer_tail];
+    int ret = (bit_is_set(*_ucsrb, UCSZ02) && SERIAL9BIT_bit(_rx_9bit, _rx_buffer_tail)) ? ((int)c | 0x100) : (int)c;
     _rx_buffer_tail = (rx_buffer_index_t)(_rx_buffer_tail + 1) % SERIAL_RX_BUFFER_SIZE;
-    return c;
+    return ret;
   }
 }
 
@@ -222,7 +236,7 @@ void HardwareSerial::flush()
   // the hardware finished tranmission (TXC is set).
 }
 
-size_t HardwareSerial::write(uint8_t c)
+size_t HardwareSerial::xwrite(uint8_t c, bool bit9)
 {
   _written = true;
   // If the buffer and the data register is empty, just write the byte
@@ -239,6 +253,13 @@ size_t HardwareSerial::write(uint8_t c)
     // is transmitted (setting TXC) before clearing TXC. Then TXC will
     // be cleared when no bytes are left, causing flush() to hang
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+      if(bit_is_set(*_ucsrb, UCSZ02)) {
+        if (bit9) {
+          sbi(*_ucsrb, TXB80);
+        } else {
+          cbi(*_ucsrb, TXB80);
+        }
+      }
       *_udr = c;
 #ifdef MPCM0
       *_ucsra = ((*_ucsra) & ((1 << U2X0) | (1 << MPCM0))) | (1 << TXC0);
@@ -266,6 +287,11 @@ size_t HardwareSerial::write(uint8_t c)
   }
 
   _tx_buffer[_tx_buffer_head] = c;
+  if (bit9) {
+    SERIAL9BIT_sbi(_tx_9bit, _tx_buffer_head);
+  } else {
+    SERIAL9BIT_cbi(_tx_9bit, _tx_buffer_head);
+  }
 
   // make atomic to prevent execution of ISR between setting the
   // head pointer and setting the interrupt flag resulting in buffer
@@ -276,6 +302,31 @@ size_t HardwareSerial::write(uint8_t c)
   }
   
   return 1;
+}
+
+size_t HardwareSerial::write(uint8_t c)
+{
+	return xwrite(c, false);
+}
+
+void HardwareSerial::set_tx_mode(void)
+{
+  // Disable RX
+  cbi(*_ucsrb, RXEN0);
+  cbi(*_ucsrb, RXCIE0);
+  // Enable only TX
+  sbi(*_ucsrb, TXEN0);
+  cbi(*_ucsrb, UDRIE0);
+}
+
+void HardwareSerial::set_rx_mode(void)
+{
+    // Disable TX
+  cbi(*_ucsrb, TXEN0);
+  cbi(*_ucsrb, UDRIE0);
+  // Enable only RX
+  sbi(*_ucsrb, RXEN0);
+  sbi(*_ucsrb, RXCIE0);
 }
 
 #endif // whole file
